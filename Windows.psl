@@ -1,0 +1,62 @@
+
+$timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$outputDir = "C:\IR_Data_$timestamp"
+New-Item -Path $outputDir -ItemType Directory -Force | Out-Null
+Write-Host "Output directory created: $outputDir"
+
+function Save-Data {
+    param(
+        [string]$fileName,
+        [string]$data
+    )
+    $filePath = Join-Path -Path $outputDir -ChildPath $fileName
+    $data | Out-File -FilePath $filePath -Encoding UTF8
+    Write-Host "Data saved to: $filePath"
+}
+
+Write-Host "Starting data collection..."
+Write-Host "---------------------------"
+
+Write-Host "1. Collecting System Information..."
+$systemInfo = @()
+$systemInfo += "Hostname: " + (Get-CimInstance Win32_ComputerSystem).Name
+$systemInfo += "OS Version: " + (Get-CimInstance Win32_OperatingSystem).Caption
+$systemInfo += "Architecture: " + (Get-CimInstance Win32_OperatingSystem).OSArchitecture
+$systemInfo += "Uptime (Days): " + ((Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime).TotalDays.ToString("F2")
+$systemInfo += "Current User: " + (whoami)
+Save-Data -fileName "01_System_Info.txt" -data $systemInfo
+
+Write-Host "2. Collecting Network Connections..."
+$networkInfo = netstat -ano
+Save-Data -fileName "02_Network_Connections.txt" -data $networkInfo
+
+Write-Host "3. Collecting Running Processes..."
+$processes = Get-Process | Select-Object Id, ProcessName, Path, StartTime, Handles, WorkingSet, CPU | Sort-Object CPU -Descending
+Save-Data -fileName "03_Running_Processes.txt" -data ($processes | Format-List)
+
+Write-Host "4. Collecting Autostart Entries..."
+$autostart = @()
+$autostart += "## Registry Run Keys ##"
+$autostart += Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+$autostart += Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
+$autostart += Get-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+$autostart += Get-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
+
+$autostart += "## Startup Folder ##"
+$autostart += Get-ChildItem -Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup" -Recurse
+$autostart += Get-ChildItem -Path "$env:AppData\Microsoft\Windows\Start Menu\Programs\Startup" -Recurse
+
+Save-Data -fileName "04_Autostart_Entries.txt" -data ($autostart | Out-String)
+
+Write-Host "5. Collecting Recent Files..."
+$recentFiles = Get-ChildItem -Path "$env:USERPROFILE\Recent" -Recurse | Select-Object FullName, LastAccessTime
+Save-Data -fileName "05_Recent_Files.txt" -data ($recentFiles | Format-List)
+
+Write-Host "6. Exporting Event Logs (last 24 hours)..."
+$logEvents = Get-WinEvent -FilterHashtable @{Logname='Security'; Level=2,3; StartTime=(Get-Date).AddDays(-1)} -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, LevelDisplayName, ProviderName, Message
+Save-Data -fileName "06_Security_Events.txt" -data ($logEvents | Format-List)
+$logEvents = Get-WinEvent -FilterHashtable @{Logname='System'; Level=2,3; StartTime=(Get-Date).AddDays(-1)} -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, LevelDisplayName, ProviderName, Message
+Save-Data -fileName "07_System_Events.txt" -data ($logEvents | Format-List)
+
+Write-Host "---------------------------"
+Write-Host "Data collection complete. Check the directory: $outputDir"
